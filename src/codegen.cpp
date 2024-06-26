@@ -5194,7 +5194,7 @@ static jl_cgval_t emit_invoke(jl_codectx_t &ctx, const jl_cgval_t &lival, ArrayR
                         uint8_t specsigflags;
                         jl_callptr_t invoke;
                         void *fptr;
-                        jl_read_codeinst_invoke(codeinst, &specsigflags, &invoke, &fptr);
+                        jl_read_codeinst_invoke(codeinst, &specsigflags, &invoke, &fptr, 0);
                         if (specsig ? specsigflags & 0b1 : invoke == jl_fptr_args_addr) {
                             protoname = jl_ExecutionEngine->getFunctionAtAddress((uintptr_t)fptr, codeinst);
                             if (ctx.external_linkage) {
@@ -6926,7 +6926,7 @@ static Function* gen_cfun_wrapper(
         uint8_t specsigflags;
         jl_callptr_t invoke;
         void *fptr;
-        jl_read_codeinst_invoke(codeinst, &specsigflags, &invoke, &fptr);
+        jl_read_codeinst_invoke(codeinst, &specsigflags, &invoke, &fptr, 0);
         assert(invoke);
         if (invoke == jl_fptr_args_addr) {
             callptr = fptr;
