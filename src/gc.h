@@ -124,7 +124,7 @@ typedef struct _jl_gc_chunk_t {
 
 JL_EXTENSION typedef struct _bigval_t {
     struct _bigval_t *next;
-    struct _bigval_t **prev; // pointer to the next field of the prev entry
+    struct _bigval_t *prev;
     size_t sz;
 #ifdef _P64 // Add padding so that the value is 64-byte aligned
     // (8 pointers of 8 bytes each) - (4 other pointers in struct)
@@ -539,21 +539,29 @@ STATIC_INLINE void *gc_ptr_clear_tag(void *v, uintptr_t mask) JL_NOTSAFEPOINT
 
 NOINLINE uintptr_t gc_get_stack_ptr(void);
 
-STATIC_INLINE void gc_big_object_unlink(const bigval_t *hdr) JL_NOTSAFEPOINT
+STATIC_INLINE void gc_big_object_unlink(bigval_t **p_head, const bigval_t *node) JL_NOTSAFEPOINT
 {
-    *hdr->prev = hdr->next;
-    if (hdr->next) {
-        hdr->next->prev = hdr->prev;
+    assert(p_head != NULL);
+    if (*p_head == node) {
+        *p_head = node->next;
+    }
+    if (node->next != NULL) {
+        node->next->prev = node->prev;
+    }
+    if (node->prev != NULL) {
+        node->prev->next = node->next;
     }
 }
 
-STATIC_INLINE void gc_big_object_link(bigval_t *hdr, bigval_t **list) JL_NOTSAFEPOINT
+STATIC_INLINE void gc_big_object_link(bigval_t **p_head, bigval_t *node) JL_NOTSAFEPOINT
 {
-    hdr->next = *list;
-    hdr->prev = list;
-    if (*list)
-        (*list)->prev = &hdr->next;
-    *list = hdr;
+    assert(p_head != NULL);
+    node->next = *p_head;
+    node->prev = NULL;
+    if (*p_head != NULL) {
+        (*p_head)->prev = node;
+    }
+    *p_head = node;
 }
 
 extern uv_mutex_t gc_threads_lock;

@@ -143,6 +143,8 @@ typedef struct {
 
     // variable for tracking young (i.e. not in `GC_OLD_MARKED`/last generation) large objects
     struct _bigval_t *young_generation_of_bigvals;
+    // variable for tracking old (i.e. in `GC_OLD_MARKED`/last generation) large objects
+    struct _bigval_t *oldest_generation_of_bigvals;
 
     // variables for tracking "remembered set"
     arraylist_t _remset[2]; // contains jl_value_t*
@@ -170,17 +172,6 @@ typedef struct {
     size_t perm_scanned_bytes;
     // thread local increment of `scanned_bytes`
     size_t scanned_bytes;
-    // Number of queued big objects (<= 1024)
-    size_t nbig_obj;
-    // Array of queued big objects to be moved between the young list
-    // and the old list.
-    // A set low bit means that the object should be moved from the old list
-    // to the young list (`mark_reset_age`).
-    // Objects can only be put into this list when the mark bit is flipped to
-    // `1` (atomically). Combining with the sync after marking,
-    // this makes sure that a single objects can only appear once in
-    // the lists (the mark bit cannot be flipped to `0` without sweeping)
-    void *big_obj[1024];
 } jl_gc_mark_cache_t;
 
 struct _jl_bt_element_t;
