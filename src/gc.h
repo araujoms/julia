@@ -440,7 +440,7 @@ STATIC_INLINE unsigned ffs_u32(uint32_t bitvec)
 #endif
 
 extern jl_gc_num_t gc_num;
-extern bigval_t *big_objects_marked;
+extern bigval_t *oldest_generation_of_bigvals;
 extern arraylist_t finalizer_list_marked;
 extern arraylist_t to_finalize;
 extern int64_t buffered_pages;

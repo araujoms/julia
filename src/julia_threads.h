@@ -143,8 +143,6 @@ typedef struct {
 
     // variable for tracking young (i.e. not in `GC_OLD_MARKED`/last generation) large objects
     struct _bigval_t *young_generation_of_bigvals;
-    // variable for tracking old (i.e. in `GC_OLD_MARKED`/last generation) large objects
-    struct _bigval_t *oldest_generation_of_bigvals;
 
     // variables for tracking "remembered set"
     arraylist_t _remset[2]; // contains jl_value_t*

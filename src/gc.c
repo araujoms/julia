@@ -203,8 +203,8 @@ JL_DLLEXPORT uintptr_t jl_get_buff_tag(void) JL_NOTSAFEPOINT
     return jl_buff_tag;
 }
 
-// List of marked big objects.  Not per-thread.  Accessed only by master thread.
-bigval_t *big_objects_marked = NULL;
+// List of big objects in oldest generation (`GC_OLD_MARKED`).  Not per-thread.  Accessed only by master thread.
+bigval_t *oldest_generation_of_bigvals = NULL;
 
 // -- Finalization --
 // `ptls->finalizers` and `finalizer_list_marked` might have tagged pointers.
@@ -1048,7 +1048,7 @@ static void sweep_big_list_of_young_bigvals(bigval_t **young, bigval_t **old) JL
     }
 }
 
-static void sweep_big_list_of_oldest_bigvals(bigval_t **old) JL_NOTSAFEPOINT
+static void sweep_big_list_of_oldest_bigvals(bigval_t **young, bigval_t **old) JL_NOTSAFEPOINT
 {
     bigval_t *v = *old;
     while (v != NULL) {
@@ -1056,6 +1056,8 @@ static void sweep_big_list_of_oldest_bigvals(bigval_t **old) JL_NOTSAFEPOINT
         int bits = v->bits.gc;
         int old_bits = bits;
         if (gc_marked(bits)) {
+            gc_big_object_unlink(old, v);
+            gc_big_object_link(young, v);
             v->bits.gc = GC_OLD;
         }
         else {
@@ -1073,15 +1075,14 @@ static void sweep_big(jl_ptls_t ptls) JL_NOTSAFEPOINT
     for (int i = 0; i < gc_n_threads; i++) {
         jl_ptls_t ptls2 = gc_all_tls_states[i];
         if (ptls2 != NULL) {
-            sweep_big_list_of_young_bigvals(&ptls2->heap.young_generation_of_bigvals,
-                                            &ptls2->heap.oldest_generation_of_bigvals);
+            sweep_big_list_of_young_bigvals(&ptls2->heap.young_generation_of_bigvals, &oldest_generation_of_bigvals);
         }
     }
     if (current_sweep_full) {
         for (int i = 0; i < gc_n_threads; i++) {
             jl_ptls_t ptls2 = gc_all_tls_states[i];
             if (ptls2 != NULL) {
-                sweep_big_list_of_oldest_bigvals(&ptls2->heap.oldest_generation_of_bigvals);
+                sweep_big_list_of_oldest_bigvals(&ptls2->heap.young_generation_of_bigvals, &oldest_generation_of_bigvals);
             }
         }
     }
@@ -3982,7 +3983,6 @@ void jl_init_thread_heap(jl_ptls_t ptls)
     heap->mallocarrays = NULL;
     heap->mafreelist = NULL;
     heap->young_generation_of_bigvals = NULL;
-    heap->oldest_generation_of_bigvals = NULL;
     heap->remset = &heap->_remset[0];
     heap->last_remset = &heap->_remset[1];
     arraylist_new(heap->remset, 0);
@@ -4305,49 +4305,6 @@ JL_DLLEXPORT void *jl_gc_managed_realloc(void *d, size_t sz, size_t oldsz,
 {
     jl_ptls_t ptls = jl_current_task->ptls;
     return gc_managed_realloc_(ptls, d, sz, oldsz, isaligned, owner, 1);
-}
-
-jl_value_t *jl_gc_realloc_string(jl_value_t *s, size_t sz)
-{
-    size_t len = jl_string_len(s);
-    if (sz <= len) return s;
-    jl_taggedvalue_t *v = jl_astaggedvalue(s);
-    size_t strsz = len + sizeof(size_t) + 1;
-    if (strsz <= GC_MAX_SZCLASS ||
-        // TODO: because of issue #17971 we can't resize old objects
-        gc_marked(v->bits.gc)) {
-        // pool allocated; can't be grown in place so allocate a new object.
-        jl_value_t *snew = jl_alloc_string(sz);
-        memcpy(jl_string_data(snew), jl_string_data(s), len);
-        return snew;
-    }
-    size_t newsz = sz + sizeof(size_t) + 1;
-    size_t offs = sizeof(bigval_t);
-    size_t oldsz = LLT_ALIGN(strsz + offs, JL_CACHE_BYTE_ALIGNMENT);
-    size_t allocsz = LLT_ALIGN(newsz + offs, JL_CACHE_BYTE_ALIGNMENT);
-    if (allocsz < sz)  // overflow in adding offs, size was "negative"
-        jl_throw(jl_memory_exception);
-    bigval_t *hdr = bigval_header(v);
-    jl_ptls_t ptls = jl_current_task->ptls;
-    maybe_collect(ptls); // don't want this to happen during jl_gc_managed_realloc
-    bigval_t **p_head;
-    if (hdr->bits.gc == GC_OLD_MARKED) {
-        p_head = &ptls->heap.oldest_generation_of_bigvals;
-    }
-    else {
-        p_head = &ptls->heap.young_generation_of_bigvals;
-    }
-    gc_big_object_unlink(p_head, hdr);
-    // TODO: this is not safe since it frees the old pointer. ideally we'd like
-    // the old pointer to be left alone if we can't grow in place.
-    // for now it's up to the caller to make sure there are no references to the
-    // old pointer.
-    bigval_t *newbig = (bigval_t*)gc_managed_realloc_(ptls, hdr, allocsz, oldsz, 1, s, 0);
-    newbig->sz = allocsz;
-    gc_big_object_link(p_head, newbig);
-    jl_value_t *snew = jl_valueof(&newbig->header);
-    *(size_t*)snew = sz;
-    return snew;
 }
 
 // Perm gen allocator

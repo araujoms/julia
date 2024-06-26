@@ -144,7 +144,7 @@ static void clear_mark(int bits)
         }
     }
 
-    v = big_objects_marked;
+    v = oldest_generation_of_bigvals;
     while (v != NULL) {
         void *gcv = &v->header;
         if (!gc_verifying)
@@ -1091,7 +1091,7 @@ void gc_stats_big_obj(void)
             }
             v = v->next;
         }
-        v = big_objects_marked;
+        v = oldest_generation_of_bigvals;
         while (v != NULL) {
             if (gc_marked(v->bits.gc)) {
                 nused_old++;
