@@ -190,8 +190,6 @@ static orc::ThreadSafeModule jl_get_globals_module(orc::ThreadSafeContext &ctx, 
     return GTSM;
 }
 
-extern jl_value_t *jl_fptr_wait_for_compiled(jl_value_t *f, jl_value_t **args, uint32_t nargs, jl_code_instance_t *m);
-
 // this generates llvm code for the lambda info
 // and adds the result to the jitlayers
 // (and the shadow module),
@@ -328,7 +326,7 @@ static jl_callptr_t _jl_compile_codeinst(
             jl_callptr_t prev_invoke = NULL;
             // Allow replacing addr if it is either NULL or our special waiting placeholder.
             if (!jl_atomic_cmpswap_acqrel(&this_code->invoke, &prev_invoke, addr)) {
-                if (prev_invoke == &jl_fptr_wait_for_compiled && !jl_atomic_cmpswap_acqrel(&this_code->invoke, &prev_invoke, addr)) {
+                if (prev_invoke == jl_fptr_wait_for_compiled_addr && !jl_atomic_cmpswap_acqrel(&this_code->invoke, &prev_invoke, addr)) {
                     addr = prev_invoke;
                     //TODO do we want to potentially promote invoke anyways? (e.g. invoke is jl_interpret_call or some other
                     //known lesser function)
@@ -385,7 +383,6 @@ int jl_compile_extern_c_impl(LLVMOrcThreadSafeModuleRef llvmmod, void *p, void *
         backing = jl_create_ts_module("cextern", pparams ? pparams->tsctx : ctx,  pparams ? pparams->DL : jl_ExecutionEngine->getDataLayout(), pparams ? pparams->TargetTriple : jl_ExecutionEngine->getTargetTriple());
         into = &backing;
     }
-    JL_LOCK(&jl_codegen_lock);
     auto target_info = into->withModuleDo([&](Module &M) {
         return std::make_pair(M.getDataLayout(), Triple(M.getTargetTriple()));
     });
@@ -395,6 +392,7 @@ int jl_compile_extern_c_impl(LLVMOrcThreadSafeModuleRef llvmmod, void *p, void *
     if (pparams == NULL)
         pparams = &params;
     assert(pparams->tsctx.getContext() == into->getContext().getContext());
+    JL_LOCK(&jl_codegen_lock);
     const char *name = jl_generate_ccallable(wrap(into), sysimg, declrt, sigt, *pparams);
     bool success = true;
     if (!sysimg) {
@@ -1962,7 +1960,7 @@ uint64_t JuliaOJIT::getFunctionAddress(StringRef Name)
 StringRef JuliaOJIT::getFunctionAtAddress(uint64_t Addr, jl_code_instance_t *codeinst)
 {
     std::lock_guard<std::mutex> lock(RLST_mutex);
-    assert(Addr != (uint64_t)&jl_fptr_wait_for_compiled);
+    assert(Addr != (uint64_t)jl_fptr_wait_for_compiled_addr);
     std::string *fname = &ReverseLocalSymbolTable[(void*)(uintptr_t)Addr];
     if (fname->empty()) {
         std::string string_fname;
