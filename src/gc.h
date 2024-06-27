@@ -122,6 +122,8 @@ typedef struct _jl_gc_chunk_t {
 
 // layout for big (>2k) objects
 
+extern uintptr_t gc_bigval_sentinel_tag;
+
 JL_EXTENSION typedef struct _bigval_t {
     struct _bigval_t *next;
     struct _bigval_t *prev;
@@ -539,29 +541,29 @@ STATIC_INLINE void *gc_ptr_clear_tag(void *v, uintptr_t mask) JL_NOTSAFEPOINT
 
 NOINLINE uintptr_t gc_get_stack_ptr(void);
 
-STATIC_INLINE void gc_big_object_unlink(bigval_t **p_head, const bigval_t *node) JL_NOTSAFEPOINT
+STATIC_INLINE void gc_big_object_unlink(const bigval_t *node) JL_NOTSAFEPOINT
 {
-    assert(p_head != NULL);
-    if (*p_head == node) {
-        *p_head = node->next;
-    }
+    assert(node != oldest_generation_of_bigvals);
+    assert(node->header != gc_bigval_sentinel_tag);
+    assert(node->prev != NULL);
     if (node->next != NULL) {
         node->next->prev = node->prev;
     }
-    if (node->prev != NULL) {
-        node->prev->next = node->next;
-    }
+    node->prev->next = node->next;
 }
 
-STATIC_INLINE void gc_big_object_link(bigval_t **p_head, bigval_t *node) JL_NOTSAFEPOINT
+STATIC_INLINE void gc_big_object_link(bigval_t *sentinel_node, bigval_t *node) JL_NOTSAFEPOINT
 {
-    assert(p_head != NULL);
-    node->next = *p_head;
-    node->prev = NULL;
-    if (*p_head != NULL) {
-        (*p_head)->prev = node;
+    assert(sentinel_node != NULL);
+    assert(sentinel_node->header == gc_bigval_sentinel_tag);
+    assert(sentinel_node->prev == NULL);
+    assert(node->header != gc_bigval_sentinel_tag);
+    node->next = sentinel_node->next;
+    node->prev = sentinel_node;
+    if (sentinel_node->next != NULL) {
+        sentinel_node->next->prev = node;
     }
-    *p_head = node;
+    sentinel_node->next = node;
 }
 
 extern uv_mutex_t gc_threads_lock;
