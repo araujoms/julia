@@ -1024,9 +1024,10 @@ static void sweep_unlink_and_free(bigval_t *v) JL_NOTSAFEPOINT
     jl_free_aligned(v);
 }
 
-static void sweep_big_list_of_young_bigvals(bigval_t *young, bigval_t *old) JL_NOTSAFEPOINT
+static void sweep_big_list_of_young_bigvals(bigval_t *young) JL_NOTSAFEPOINT
 {
     bigval_t *v = young->next; // skip the sentinel
+    bigval_t *old = oldest_generation_of_bigvals;
     while (v != NULL) {
         bigval_t *nxt = v->next;
         int bits = v->bits.gc;
@@ -1051,23 +1052,16 @@ static void sweep_big_list_of_young_bigvals(bigval_t *young, bigval_t *old) JL_N
     }
 }
 
-static void sweep_big_list_of_oldest_bigvals(bigval_t *young, bigval_t *old) JL_NOTSAFEPOINT
+static void sweep_big_list_of_oldest_bigvals(bigval_t *young) JL_NOTSAFEPOINT
 {
-    bigval_t *v = old->next; // skip the sentinel
+    bigval_t *v = oldest_generation_of_bigvals->next; // skip the sentinel
     while (v != NULL) {
         bigval_t *nxt = v->next;
-        int bits = v->bits.gc;
-        int old_bits = bits;
-        if (gc_marked(bits)) {
-            assert(bits == GC_OLD_MARKED);
-            gc_big_object_unlink(v);
-            gc_big_object_link(young, v);
-            v->bits.gc = GC_OLD;
-        }
-        else {
-            sweep_unlink_and_free(v);
-        }
-        gc_time_count_big(old_bits, bits);
+        assert(v->bits.gc == GC_OLD_MARKED);
+        gc_big_object_unlink(v);
+        gc_big_object_link(young, v);
+        v->bits.gc = GC_OLD;
+        gc_time_count_big(GC_OLD_MARKED, GC_OLD);
         v = nxt;
     }
 }
@@ -1079,14 +1073,14 @@ static void sweep_big(jl_ptls_t ptls) JL_NOTSAFEPOINT
     for (int i = 0; i < gc_n_threads; i++) {
         jl_ptls_t ptls2 = gc_all_tls_states[i];
         if (ptls2 != NULL) {
-            sweep_big_list_of_young_bigvals(ptls2->heap.young_generation_of_bigvals, oldest_generation_of_bigvals);
+            sweep_big_list_of_young_bigvals(ptls2->heap.young_generation_of_bigvals);
         }
     }
     if (current_sweep_full) {
         for (int i = 0; i < gc_n_threads; i++) {
             jl_ptls_t ptls2 = gc_all_tls_states[i];
             if (ptls2 != NULL) {
-                sweep_big_list_of_oldest_bigvals(ptls2->heap.young_generation_of_bigvals, oldest_generation_of_bigvals);
+                sweep_big_list_of_oldest_bigvals(ptls2->heap.young_generation_of_bigvals);
             }
         }
     }
