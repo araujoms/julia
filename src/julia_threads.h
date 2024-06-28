@@ -157,6 +157,7 @@ typedef struct {
 
 #define JL_N_STACK_POOLS 16
     small_arraylist_t free_stacks[JL_N_STACK_POOLS];
+    arraylist_t fixups_from_mark_reset_age;
 } jl_thread_heap_t;
 
 typedef struct {

@@ -802,6 +802,10 @@ STATIC_INLINE void gc_setmark_big(jl_ptls_t ptls, jl_taggedvalue_t *o,
     }
     else {
         ptls->gc_cache.scanned_bytes += hdr->sz;
+        if (mark_reset_age) {
+            // Reset the object as if it was just allocated
+            arraylist_push(&ptls->heap.fixups_from_mark_reset_age, hdr);
+        }
     }
     objprofile_count(jl_typeof(jl_valueof(o)),
                      mark_mode == GC_OLD_MARKED, hdr->sz);
@@ -1024,8 +1028,22 @@ static void sweep_unlink_and_free(bigval_t *v) JL_NOTSAFEPOINT
     jl_free_aligned(v);
 }
 
-static void sweep_big_list_of_young_bigvals(bigval_t *young) JL_NOTSAFEPOINT
+static void fixup_list_from_mark_reset_age(jl_ptls_t ptls) JL_NOTSAFEPOINT
 {
+    bigval_t *v;
+    while (1) {
+        v = (bigval_t*)arraylist_pop(&ptls->heap.fixups_from_mark_reset_age);
+        if (v == NULL) {
+            break;
+        }
+        gc_big_object_unlink(v);
+        gc_big_object_link(ptls->heap.young_generation_of_bigvals, v);
+    }
+}
+
+static bigval_t *sweep_list_of_young_bigvals(bigval_t *young) JL_NOTSAFEPOINT
+{
+    bigval_t *last_node = young;
     bigval_t *v = young->next; // skip the sentinel
     bigval_t *old = oldest_generation_of_bigvals;
     while (v != NULL) {
@@ -1035,6 +1053,7 @@ static void sweep_big_list_of_young_bigvals(bigval_t *young) JL_NOTSAFEPOINT
         if (gc_marked(bits)) {
             if (bits == GC_MARKED) {
                 bits = GC_OLD;
+                last_node = v;
             }
             else { // `bits == GC_OLD_MARKED`
                 assert(bits == GC_OLD_MARKED);
@@ -1050,16 +1069,15 @@ static void sweep_big_list_of_young_bigvals(bigval_t *young) JL_NOTSAFEPOINT
         gc_time_count_big(old_bits, bits);
         v = nxt;
     }
+    return last_node;
 }
 
-static void sweep_big_list_of_oldest_bigvals(bigval_t *young) JL_NOTSAFEPOINT
+static void sweep_list_of_oldest_bigvals(bigval_t *young) JL_NOTSAFEPOINT
 {
     bigval_t *v = oldest_generation_of_bigvals->next; // skip the sentinel
     while (v != NULL) {
         bigval_t *nxt = v->next;
         assert(v->bits.gc == GC_OLD_MARKED);
-        gc_big_object_unlink(v);
-        gc_big_object_link(young, v);
         v->bits.gc = GC_OLD;
         gc_time_count_big(GC_OLD_MARKED, GC_OLD);
         v = nxt;
@@ -1073,16 +1091,29 @@ static void sweep_big(jl_ptls_t ptls) JL_NOTSAFEPOINT
     for (int i = 0; i < gc_n_threads; i++) {
         jl_ptls_t ptls2 = gc_all_tls_states[i];
         if (ptls2 != NULL) {
-            sweep_big_list_of_young_bigvals(ptls2->heap.young_generation_of_bigvals);
+            fixup_list_from_mark_reset_age(ptls2);
+        }
+    }
+    bigval_t *last_node_in_my_list = NULL;
+    for (int i = 0; i < gc_n_threads; i++) {
+        jl_ptls_t ptls2 = gc_all_tls_states[i];
+        if (ptls2 != NULL) {
+            bigval_t *last_node = sweep_list_of_young_bigvals(ptls2->heap.young_generation_of_bigvals);
+            if (ptls == ptls2) {
+                last_node_in_my_list = last_node;
+            }
         }
     }
     if (current_sweep_full) {
-        for (int i = 0; i < gc_n_threads; i++) {
-            jl_ptls_t ptls2 = gc_all_tls_states[i];
-            if (ptls2 != NULL) {
-                sweep_big_list_of_oldest_bigvals(ptls2->heap.young_generation_of_bigvals);
-            }
+        sweep_list_of_oldest_bigvals(ptls->heap.young_generation_of_bigvals);
+        // move all nodes in `oldest_generation_of_bigvals` to my list of bigvals
+        assert(last_node_in_my_list != NULL);
+        assert(last_node_in_my_list->next == NULL);
+        last_node_in_my_list->next = oldest_generation_of_bigvals->next; // skip the sentinel
+        if (oldest_generation_of_bigvals->next != NULL) {
+            oldest_generation_of_bigvals->next->prev = last_node_in_my_list;
         }
+        oldest_generation_of_bigvals->next = NULL;
     }
     gc_time_big_end();
 }
@@ -3983,6 +4014,7 @@ void jl_init_thread_heap(jl_ptls_t ptls)
     heap->young_generation_of_bigvals = (bigval_t*)calloc_s(sizeof(bigval_t)); // sentinel
     assert(gc_bigval_sentinel_tag != 0); // make sure the sentinel is initialized
     heap->young_generation_of_bigvals->header = gc_bigval_sentinel_tag;
+    arraylist_new(&heap->fixups_from_mark_reset_age, 0);
     heap->remset = &heap->_remset[0];
     heap->last_remset = &heap->_remset[1];
     arraylist_new(heap->remset, 0);
